@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Simple Ludo — Single File</title>
+  <style>
+    /* Basic reset */
+    *{box-sizing:border-box;font-family:Inter, system-ui, Arial, sans-serif}
+    body{margin:0;display:flex;gap:20px;min-height:100vh;align-items:flex-start;padding:20px;background:#f3f4f6}
+
+    /* Container */
+    .app{display:flex;gap:20px;width:100%;max-width:1200px;margin:0 auto}
+
+    /* Board */
+    .board{width:640px;height:640px;background:#fff;border-radius:12px;padding:12px;box-shadow:0 6px 20px rgba(10,10,20,0.08);display:grid;grid-template-columns:repeat(15,1fr);grid-template-rows:repeat(15,1fr);position:relative}
+
+    /* Squares */
+    .cell{border:1px solid #e6e7ea;background:transparent;display:flex;align-items:center;justify-content:center;position:relative}
+    .cell.small{font-size:11px}
+
+    /* Colors for player bases */
+    .base.red{background:linear-gradient(90deg,#ffecec,#fff)}
+    .base.green{background:linear-gradient(90deg,#ecfff0,#fff)}
+    .base.yellow{background:linear-gradient(90deg,#fffbe6,#fff)}
+    .base.blue{background:linear-gradient(90deg,#eef6ff,#fff)}
+
+    /* Token style */
+    .token{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;box-shadow:0 4px 8px rgba(10,10,20,0.12);cursor:pointer}
+    .token.small{width:28px;height:28px;font-size:12px}
+    .red{background:#ef4444}
+    .green{background:#10b981}
+    .yellow{background:#f59e0b}
+    .blue{background:#3b82f6}
+
+    .controls{flex:1;display:flex;flex-direction:column;gap:12px}
+    .card{background:#fff;padding:12px;border-radius:10px;box-shadow:0 6px 18px rgba(10,10,20,0.06)}
+    h2{margin:0 0 8px 0}
+
+    .dice{display:flex;align-items:center;gap:12px}
+    .dice .face{width:72px;height:72px;border-radius:12px;border:2px solid #e6e7ea;display:flex;align-items:center;justify-content:center;font-size:28px}
+    button{padding:8px 12px;border-radius:8px;border:0;background:#111827;color:#fff;cursor:pointer}
+    .btn-secondary{background:#6b7280}
+
+    .log{height:220px;overflow:auto;padding:8px;border-radius:8px;background:#0f172a;color:#fff}
+
+    .legend{display:flex;gap:8px;flex-wrap:wrap}
+    .legend .item{display:flex;gap:8px;align-items:center}
+
+    .overlay{position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+    .current-turn{pointer-events:auto}
+
+    /* home column */\    
+    .home-path{background:#f8fafc}
+
+    /* small helpers */
+    .muted{color:#6b7280;font-size:13px}
+    .center{text-align:center}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="board card" id="board"></div>
+
+    <div class="controls">
+      <div class="card">
+        <h2>Ludo — Controls</h2>
+        <div class="dice">
+          <div class="face" id="diceFace">—</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <button id="rollBtn">Roll Dice</button>
+            <button id="nextBtn" class="btn-secondary">Next Turn</button>
+          </div>
+        </div>
+        <p class="muted">Turn: <strong id="turnIndicator">Red</strong></p>
+        <div class="legend" id="legend"></div>
+      </div>
+
+      <div class="card">
+        <h2>Game Log</h2>
+        <div class="log" id="log"></div>
+      </div>
+
+      <div class="card">
+        <h2>How to Play (simple)</h2>
+        <ol>
+          <li>Click <strong>Roll Dice</strong> to roll (1–6).</li>
+          <li>Roll a 6 to move a token out of base; otherwise choose an in-play token to move.</li>
+          <li>Landing on an opponent's token (non-safe square) sends it back to its base.</li>
+          <li>First player to get all 4 tokens to the center finish wins.</li>
+        </ol>
+        <p class="muted">This is a simplified rules set — no block rules, minimal safe squares. You can extend logic in the code comments.</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /* ---------------------------
+       Simple single-file Ludo
+       - 4 players (red, green, yellow, blue)
+       - 4 tokens each
+       - Start when token rolls a 6
+       - Capture opponent tokens on non-safe squares
+       - Basic paths defined for each color
+       --------------------------- */
+
+    const boardEl = document.getElementById('board');
+    const diceFace = document.getElementById('diceFace');
+    const rollBtn = document.getElementById('rollBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const turnIndicator = document.getElementById('turnIndicator');
+    const logEl = document.getElementById('log');
+    const legendEl = document.getElementById('legend');
+
+    // Colors and order of play
+    const COLORS = ['red','green','yellow','blue'];
+    const START_POS = {red:1, green:14, yellow:211, blue:198}; // not used directly; we will build path indexes
+
+    // We'll build a 15x15 board with cells indexed 0..224 (15*15 - 1)
+    const SIZE = 15;
+    const CELLS = SIZE*SIZE; //225
+
+    // Generate board DOM cells; store meta in an array
+    const cells = [];
+    for(let r=0;r<SIZE;r++){
+      for(let c=0;c<SIZE;c++){
+        const idx = r*SIZE + c;
+        const cell = document.createElement('div');
+        cell.className = 'cell small';
+        cell.dataset.idx = idx;
+        boardEl.appendChild(cell);
+        cells.push({el:cell, idx, r, c, tokens:[]});
+      }
+    }
+
+    // For simplicity, define starting base areas and the central finish
+    // We'll mark 4 corner 6x6 bases for each color
+    function markBases(){
+      // red top-left 6x6
+      for(let r=0;r<6;r++)for(let c=0;c<6;c++)cells[r*SIZE+c].el.classList.add('base','red');
+      // green top-right
+      for(let r=0;r<6;r++)for(let c=9;c<15;c++)cells[r*SIZE+c].el.classList.add('base','green');
+      // yellow bottom-right
+      for(let r=9;r<15;r++)for(let c=9;c<15;c++)cells[r*SIZE+c].el.classList.add('base','yellow');
+      // blue bottom-left
+      for(let r=9;r<15;r++)for(let c=0;c<6;c++)cells[r*SIZE+c].el.classList.add('base','blue');
+
+      // center 3x3 is finishing zone
+      for(let r=6;r<9;r++)for(let c=6;c<9;c++)cells[r*SIZE+c].el.classList.add('home-path');
+    }
+    markBases();
+
+    // Define a simplified linear path of 52 steps like real Ludo but mapped to indices
+    // We'll pick 52 visually across board positions — approximate mapping for play mechanics
+    // Define the path as a list of cell indices starting from red's entry and going clockwise.
+    const PATH = [];
+    // We'll build the path manually by choosing cells around the central cross.
+    // For readability: pick coordinates (r,c)
+    const pathCoords = [
+      [6,1],[6,2],[6,3],[6,4],[6,5], // red approach
+      [5,6],[4,6],[3,6],[2,6],[1,6],
+      [0,6],[0,7],[1,7],[2,7],[3,7],[4,7],[5,7],[6,8],
+      [6,9],[6,10],[6,11],[6,12],[6,13],[6,14],
+      [7,14],[8,14],[8,13],[8,12],[8,11],[8,10],[8,9],
+      [9,8],[10,8],[11,8],[12,8],[13,8],[14,8],
+      [14,7],[13,7],[12,7],[11,7],[10,7],[9,7],
+      [8,6],[8,5],[8,4],[8,3],[8,2],[8,1],[8,0],
+      [7,0],[6,0]
+    ];
+    for(const [r,c] of pathCoords){ PATH.push(r*SIZE + c); }
+    // PATH length should be ~52
+
+    // Map color-specific starting index on PATH
+    const START_INDEX = {red:0, green:13, yellow:26, blue:39};
+
+    // Each color has four home entry cells (inside the corner base) -> not used as path steps
+    // We'll store token objects: {id, color, state:'base'|'active'|'finished', pos: stepIndex (0..51)}
+
+    const game = {
+      players: {},
+      turnIndex:0,
+      dice:1,
+      rolled:false,
+      winner:null
+    };
+
+    // initialize players and tokens
+    for(const color of COLORS){
+      game.players[color]={color, tokens:[]};
+      for(let i=0;i<4;i++){
+        const token = {id:i,color,state:'base',pos:null,el:null};
+        game.players[color].tokens.push(token);
+      }
+    }
+
+    // place token DOM elements in base corners visually
+    function renderTokens(){
+      // first remove any token DOM elements from cells
+      for(const cell of cells){ while(cell.el.firstChild) cell.el.removeChild(cell.el.firstChild); cell.tokens=[]; }
+
+      // place tokens in bases or on PATH cells
+      for(const color of COLORS){
+        const p = game.players[color];
+        for(const t of p.tokens){
+          const tokenEl = document.createElement('div');
+          tokenEl.className = `token ${color}`;
+          tokenEl.textContent = t.id+1;
+          tokenEl.dataset.color = color;
+          tokenEl.dataset.tid = t.id;
+          token.el = tokenEl;
+
+          // add click handler to move when applicable
+          tokenEl.addEventListener('click', ()=>onTokenClick(t));
+
+          if(t.state==='base'){
+            // compute base cell to place in each corner - simple spread
+            const baseCellIdx = getBaseCellFor(color,t.id);
+            cells[baseCellIdx].el.appendChild(tokenEl);
+            cells[baseCellIdx].tokens.push(t);
+          }else if(t.state==='active'){
+            const boardIdx = PATH[t.pos];
+            cells[boardIdx].el.appendChild(tokenEl);
+            cells[boardIdx].tokens.push(t);
+          }else if(t.state==='finished'){
+            // put into center 3x3 area (arrange by color)
+            const finishCellIdx = getFinishCellFor(color,t.id);
+            cells[finishCellIdx].el.appendChild(tokenEl);
+            cells[finishCellIdx].tokens.push(t);
+          }
+        }
+      }
+    }
+
+    // helpers to pick base/final cells for visuals
+    function getBaseCellFor(color, id){
+      // each color corner assign 4 cells in their corner center
+      if(color==='red') return (1+id)*SIZE + 1; // near top-left
+      if(color==='green') return (1+id)*SIZE + 13; // top-right
+      if(color==='yellow') return (13+id)*SIZE + 13; // bottom-right
+      if(color==='blue') return (13+id)*SIZE + 1; // bottom-left
+      return 0;
+    }
+    function getFinishCellFor(color, id){
+      // center 3x3 at (6..8,6..8) -> pick different cells per color & token
+      const centerBase = {red:[7,7],green:[6,7],yellow:[7,6],blue:[6,6]};
+      const [r,c] = centerBase[color];
+      return r*SIZE + c; // simplified, crowding allowed
+    }
+
+    // simple log helper
+    function lg(txt){ const p=document.createElement('div'); p.textContent=txt; logEl.prepend(p); }
+
+    // display legend
+    function renderLegend(){
+      legendEl.innerHTML='';
+      for(const color of COLORS){
+        const it = document.createElement('div'); it.className='item';
+        const dot = document.createElement('div'); dot.style.width='16px'; dot.style.height='16px'; dot.style.borderRadius='50%'; dot.style.background=getComputedStyle(document.body).getPropertyValue('--') || ''; dot.className=color;
+        const txt = document.createElement('div'); txt.textContent = color.charAt(0).toUpperCase()+color.slice(1);
+        it.appendChild(dot); it.appendChild(txt);
+        legendEl.appendChild(it);
+      }
+    }
+
+    renderLegend();
+
+    // token click: if dice rolled and it's current player's token, move if legal
+    function onTokenClick(token){
+      const currentColor = COLORS[game.turnIndex];
+      if(token.color !== currentColor) { lg('Not your token'); return; }
+      if(!game.rolled){ lg('Roll dice first'); return; }
+      // compute available move
+      if(token.state==='base'){
+        const oldPos = null; // no old pos in base
+        if(game.dice===6){ // move out of base to starting path
+          token.state='active';
+          const oldPos = token.pos;
+          token.pos = START_INDEX[token.color];
+          lg(`${capitalize(token.color)} token ${token.id+1} enters the board`);
+          afterMove(token,true);
+        }else{ lg('Need a 6 to enter from base'); return; }
+      }else if(token.state==='active'){
+        const oldPos = token.pos;
+        const newPos = token.pos + game.dice;
+        // finishing threshold: if crossing 52 (PATH.length) then token finished (simplified mapping)
+        if(newPos >= PATH.length){
+          token.state='finished'; token.pos=null; lg(`${capitalize(token.color)} token ${token.id+1} reached finish!`);
+          afterMove(token,false);
+        }else{
+          highlightMove(token, oldPos, newPos);
+          token.pos = newPos;
+          lg(`${capitalize(token.color)} token ${token.id+1} moved to step ${token.pos}`);
+          afterMove(token,false);
+        }
+      }
+    }
+
+    // highlight path movement
+    function highlightMove(token, oldPos, newPos){
+      if(oldPos===null || newPos===null) return;
+      const start = Math.min(oldPos,newPos);
+      const end = Math.max(oldPos,newPos);
+      for(let i=start;i<=end;i++){
+        const idx = PATH[i];
+        const cell = cells[idx].el;
+        cell.style.outline = '4px solid #1e293b'; cell.style.background = '#0f172a33';;
+        setTimeout(()=>{ cell.style.outline=''; cell.style.background=''; },600);
+      }
+    }
+
+    // after a move, handle captures and render
+    function afterMove(token,entered){
+      // handle capture: if multiple tokens present on same cell and belong to other players -> send them to base
+      if(token.state==='active'){
+        const idx = PATH[token.pos];
+        const occupants = cells[idx].tokens.slice(); // tokens array will be updated in render
+        // find opponent tokens on that cell by checking DOM children (they still show old placement until render)
+        // We'll scan game state to find tokens at same PATH pos
+        for(const color of COLORS){
+          for(const t of game.players[color].tokens){
+            if(t!==token && t.state==='active' && PATH[t.pos]===PATH[token.pos]){
+              // safe square? we won't implement many safe squares; allow capture if colors differ
+              // send opponent token home
+              t.state='base'; t.pos=null;
+              lg(`${capitalize(token.color)} captured ${capitalize(color)} token ${t.id+1}!`);
+            }
+          }
+        }
+      }
+
+      // render state
+      renderTokens();
+      game.rolled=false; // clear rolled unless they rolled a 6
+      if(game.dice===6){ lg('You rolled a 6 — roll again or move another token'); game.rolled=false; /* player may roll again manually */ }
+      else {
+        // advance turn
+        game.turnIndex = (game.turnIndex + 1) % COLORS.length;
+      }
+      updateUI();
+      checkWin();
+    }
+
+    // simple win check
+    function checkWin(){
+      for(const color of COLORS){
+        const finished = game.players[color].tokens.filter(t=>t.state==='finished').length;
+        if(finished===4){ game.winner=color; lg(`${capitalize(color)} wins the game! 🎉`); rollBtn.disabled=true; nextBtn.disabled=true; }
+      }
+    }
+
+    // UI update
+    function updateUI(){
+      turnIndicator.textContent = COLORS[game.turnIndex].charAt(0).toUpperCase()+COLORS[game.turnIndex].slice(1);
+      diceFace.textContent = game.dice;
+    }
+
+    // roll dice
+    rollBtn.addEventListener('click', ()=>{
+      if(game.winner) return;
+      game.dice = Math.floor(Math.random()*6)+1;
+      game.rolled = true;
+      lg(`${capitalize(COLORS[game.turnIndex])} rolled a ${game.dice}`);
+      updateUI();
+    });
+
+    // next turn button (in case user wants to skip after roll)
+    nextBtn.addEventListener('click', ()=>{
+      game.turnIndex = (game.turnIndex + 1) % COLORS.length;
+      lg(`Turn moved to ${capitalize(COLORS[game.turnIndex])}`);
+      updateUI();
+    });
+
+    function capitalize(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
+
+    // initial render
+    renderTokens(); updateUI(); lg('Game ready — Roll the dice to start');
+
+    // some helper visual marks: draw PATH cells background subtle
+    for(let i=0;i<PATH.length;i++){ const idx = PATH[i]; cells[idx].el.style.background='linear-gradient(180deg,#fff,#f8fafc)'; }
+
+  </script>
+</body>
+</html>
